@@ -19,7 +19,7 @@ be on the workspace's **embedding approved-domains** allowlist (Step 3).
 | # | Requirement | How to check / get it |
 |---|---|---|
 | 1 | **Databricks CLI ≥ 1.3.0** | `databricks --version` |
-| 2 | **A CLI profile for the target workspace** | `databricks auth env -p <profile>` — must return the workspace host |
+| 2 | **A CLI profile for the target workspace** | `databricks auth describe -p <profile>` — must return the workspace host |
 | 3 | **Workspace admin** on the target workspace | Needed once, to add the app domain to the embedding allowlist (Step 3). Non-admins can still deploy; the iframes just won't render inline until an admin does this. |
 | 4 | **One or more Genie spaces** you can access, plus their **space IDs** | `databricks genie list-spaces -p <profile>` |
 | 5 | **Viewers have access** to each Genie space and its underlying data | Embedded Genie authenticates the viewer; they see only rooms/data they're granted. Grant via the Genie space's **Share** dialog. |
@@ -57,8 +57,8 @@ defaults there, or override per deploy without editing any file:
 databricks bundle deploy -t dev -p <profile> \
   --var="genie_space_1_id=<space-id>" \
   --var="genie_space_1_title=My Room" \
-  --var="workspace_host=https://<workspace-host>" \
-  --var="workspace_id=<org-id>"
+  --var="genie_space_2_id=<space-id>" \
+  --var="genie_space_2_title=Another Room"
 ```
 
 | Variable | Meaning |
@@ -136,15 +136,22 @@ databricks settings aibi-dashboard-embedding-approved-domains update -p <profile
 ```
 
 The `*.databricksapps.com` wildcard covers this app and every redeploy. If the
-policy is `DENY_ALL_DOMAINS`, first switch it:
+policy is `DENY_ALL_DOMAINS`, first switch it (the `etag` from a `get` is
+required):
 
 ```bash
-databricks settings aibi-dashboard-embedding-access-policy update -p <profile> --json '{
-  "allow_missing": true,
-  "setting": {"aibi_dashboard_embedding_access_policy": {"access_policy_type": "ALLOW_APPROVED_DOMAINS"},
-              "setting_name": "default"},
-  "field_mask": "aibi_dashboard_embedding_access_policy.access_policy_type"
-}'
+ETAG=$(databricks settings aibi-dashboard-embedding-access-policy get -p <profile> \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['etag'])")
+
+databricks settings aibi-dashboard-embedding-access-policy update -p <profile> --json "{
+  \"allow_missing\": true,
+  \"setting\": {
+    \"aibi_dashboard_embedding_access_policy\": {\"access_policy_type\": \"ALLOW_APPROVED_DOMAINS\"},
+    \"etag\": \"$ETAG\",
+    \"setting_name\": \"default\"
+  },
+  \"field_mask\": \"aibi_dashboard_embedding_access_policy.access_policy_type\"
+}"
 ```
 
 Reload the app after saving — the Genie rooms render inline. A room's **Share →
