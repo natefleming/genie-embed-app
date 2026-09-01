@@ -1,0 +1,54 @@
+# Genie Embed App — Databricks App deployed via DAB (direct engine).
+# All embedded-room settings are bundle variables (override with --var or per target).
+bundle:
+  name: genie_embed
+  engine: direct # deploy without Terraform; valid values: terraform | direct
+
+variables:
+  workspace_host:
+    description: Workspace host that serves the Genie rooms (no trailing slash).
+    default: https://fevm-nfleming-stable-aws.cloud.databricks.com
+  workspace_id:
+    description: Workspace (org) id appended as the ?o= URL param.
+    default: "7474649850651417"
+  genie_space_1_id:
+    description: Genie space id for the left panel.
+    default: "01f153992389158da23cbf54fd8eb89d"
+  genie_space_1_title:
+    description: Heading shown above the left panel.
+    default: "Sales & Pricing Analytics"
+  genie_space_2_id:
+    description: Genie space id for the right panel (empty renders a single panel).
+    default: "01f14fbfc86c1fb49f5c3f489e5380ce"
+  genie_space_2_title:
+    description: Heading shown above the right panel.
+    default: "Loyalty Offers Analytics"
+
+resources:
+  apps:
+    genie_embed:
+      name: genie-embed-${bundle.target}
+      description: "Demo app embedding Genie rooms via iframe"
+      source_code_path: ./src
+      config:
+        command: ["python", "app.py"]
+        env:
+          - name: DATABRICKS_WORKSPACE_HOST
+            value: ${var.workspace_host}
+          - name: WORKSPACE_ID
+            value: ${var.workspace_id}
+          - name: GENIE_SPACE_1_ID
+            value: ${var.genie_space_1_id}
+          - name: GENIE_SPACE_1_TITLE
+            value: ${var.genie_space_1_title}
+          - name: GENIE_SPACE_2_ID
+            value: ${var.genie_space_2_id}
+          - name: GENIE_SPACE_2_TITLE
+            value: ${var.genie_space_2_title}
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://fevm-nfleming-stable-aws.cloud.databricks.com
