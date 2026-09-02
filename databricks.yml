@@ -1,5 +1,5 @@
 # Genie Embed App — Databricks App deployed via DAB (direct engine).
-# All embedded-room settings are bundle variables (override with --var or per target).
+# All settings are bundle variables (override with --var or per target).
 bundle:
   name: genie_embed
   engine: direct # deploy without Terraform; valid values: terraform | direct
@@ -11,25 +11,25 @@ variables:
   workspace_id:
     description: Workspace (org) id appended as the ?o= URL param.
     default: "7474649850651417"
-  genie_space_1_id:
-    description: Genie space id for the left panel.
+  genie_space_id:
+    description: Genie space id — the iframe room (section 1) and the Agent API agent_id (section 2).
     default: "01f153992389158da23cbf54fd8eb89d"
-  genie_space_1_title:
-    description: Heading shown above the left panel.
+  genie_space_title:
+    description: Heading/label shown for the Genie space.
     default: "Sales & Pricing Analytics"
-  genie_space_2_id:
-    description: Genie space id for the right panel (empty renders a single panel).
-    default: "01f14fbfc86c1fb49f5c3f489e5380ce"
-  genie_space_2_title:
-    description: Heading shown above the right panel.
-    default: "Loyalty Offers Analytics"
 
 resources:
   apps:
     genie_embed:
       name: genie-embed-${bundle.target}
-      description: "Demo app embedding Genie rooms via iframe"
+      description: "Demo app: two ways to surface Ask Genie in a Databricks App"
       source_code_path: ./src
+      # User-authorization (OBO) scopes the forwarded token may carry. The Genie
+      # Agent API (section 2) requires `genie`; `sql` covers the query execution
+      # Genie runs on the viewer's behalf. Adding scopes triggers a re-consent.
+      user_api_scopes:
+        - genie
+        - sql
       config:
         command: ["python", "app.py"]
         env:
@@ -37,14 +37,10 @@ resources:
             value: ${var.workspace_host}
           - name: WORKSPACE_ID
             value: ${var.workspace_id}
-          - name: GENIE_SPACE_1_ID
-            value: ${var.genie_space_1_id}
-          - name: GENIE_SPACE_1_TITLE
-            value: ${var.genie_space_1_title}
-          - name: GENIE_SPACE_2_ID
-            value: ${var.genie_space_2_id}
-          - name: GENIE_SPACE_2_TITLE
-            value: ${var.genie_space_2_title}
+          - name: GENIE_SPACE_ID
+            value: ${var.genie_space_id}
+          - name: GENIE_SPACE_TITLE
+            value: ${var.genie_space_title}
 
 targets:
   dev:

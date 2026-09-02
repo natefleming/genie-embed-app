@@ -1,16 +1,25 @@
 # Genie Embed App
 
-A demonstration Databricks App that embeds two configurable **Genie rooms**
-side-by-side via `<iframe>`, deployed as a Databricks Asset Bundle (DAB) using the
-**`direct`** deployment engine.
+A demonstration Databricks App showing **two ways to surface the "Ask Genie" chat
+experience** inside a custom app — one clearly-labeled section each — deployed as a
+Databricks Asset Bundle (DAB) using the **`direct`** deployment engine.
 
-The app is a small FastAPI page server — no database or SDK calls. It reads the
-room configuration from environment variables (supplied by the bundle) and serves
-one HTML page with two iframes, each with an "Open in Genie" link-out in its header.
+![Genie Integration Demo — the embedded Genie Space and the custom Genie Agent API chat box in one Databricks App](docs/screenshot.png)
 
-Two things must both be true for the rooms to render inline: the iframe must use
-the Genie **embed surface** (`/embed/genie/rooms/<id>`), and the app's domain must
-be on the workspace's **embedding approved-domains** allowlist (Step 3).
+| # | Section | Mechanism | Auth |
+|---|---|---|---|
+| 1 | **Embedded Genie Space** | `<iframe>` → `/embed/genie/rooms/<id>` (the full Genie chat page) | Viewer's browser session |
+| 2 | **Custom chat box (Genie Agent API)** | Self-styled UI → this app's `POST /api/ask` → GA Genie **Agent API** (`/api/2.0/genie/agents/<id>/responses`), streamed over SSE | On-behalf-of viewer (OBO) |
+
+Both use **one** Genie space (its id is both the iframe room id and the Agent API
+`agent_id` — the two are synonymous). Section 1 is pure HTML with no auth. Section 2
+adds the only server-side logic: it reads the viewer's forwarded OAuth token and
+streams the Agent API response back to the browser.
+
+> **Why not embed an AI/BI dashboard's "Ask Genie"?** AI/BI dashboards have no
+> standalone Genie chat-box widget — "Ask Genie" only appears *inside* a whole
+> embedded dashboard (with its visualizations). To get *just* a chat box, use the
+> Genie Agent API with a custom UI (section 2).
 
 ---
 
@@ -19,10 +28,10 @@ be on the workspace's **embedding approved-domains** allowlist (Step 3).
 | # | Requirement | How to check / get it |
 |---|---|---|
 | 1 | **Databricks CLI ≥ 1.3.0** | `databricks --version` |
-| 2 | **A CLI profile for the target workspace** | `databricks auth describe -p <profile>` — must return the workspace host |
-| 3 | **Workspace admin** on the target workspace | Needed once, to add the app domain to the embedding allowlist (Step 3). Non-admins can still deploy; the iframes just won't render inline until an admin does this. |
-| 4 | **One or more Genie spaces** you can access, plus their **space IDs** | `databricks genie list-spaces -p <profile>` |
-| 5 | **Viewers have access** to each Genie space and its underlying data | Embedded Genie authenticates the viewer; they see only rooms/data they're granted. Grant via the Genie space's **Share** dialog. |
+| 2 | **A CLI profile for the target workspace** | `databricks auth describe -p <profile>` |
+| 3 | **Workspace admin** (once) | To add the app domain to the embedding allowlist (Step 3), needed for **section 1's iframe**. Section 2 does not need it. |
+| 4 | **A Genie space** you can access, plus its **space ID** | `databricks genie list-spaces -p <profile>` |
+| 5 | **Viewers have access** to the space + its underlying data | Both sections run as the viewer (or, section 2 locally, as the app SP). Grant via the space's **Share** dialog. |
 
 List space IDs, e.g.:
 
@@ -39,8 +48,8 @@ databricks genie list-spaces -p <profile> \
 genie-embed-app/
   databricks.yml        # bundle (engine: direct) + variables + app resource (command + env)
   src/
-    app.py              # FastAPI page server — two Genie iframes + link-out
-    requirements.txt    # fastapi, uvicorn[standard]
+    app.py              # FastAPI: two Genie sections + streaming /api/ask proxy
+    requirements.txt    # fastapi, uvicorn[standard], httpx, databricks-sdk
 ```
 
 There is no `app.yaml` — the app's run command and environment are defined in the
@@ -48,34 +57,27 @@ bundle's app-resource `config` block, so all settings live in one file.
 
 ---
 
-## Step 1 — Configure the embedded rooms (bundle variables)
+## Step 1 — Configure the Genie space (bundle variables)
 
-Every room setting is a **bundle variable** in `databricks.yml`. Change the
-defaults there, or override per deploy without editing any file:
+Every setting is a **bundle variable** in `databricks.yml`. Change the defaults
+there, or override per deploy without editing any file:
 
 ```bash
 databricks bundle deploy -t dev -p <profile> \
-  --var="genie_space_1_id=<space-id>" \
-  --var="genie_space_1_title=My Room" \
-  --var="genie_space_2_id=<space-id>" \
-  --var="genie_space_2_title=Another Room"
+  --var="genie_space_id=<space-id>" \
+  --var="genie_space_title=My Space"
 ```
 
 | Variable | Meaning |
 |---|---|
-| `workspace_host` | Workspace host serving the Genie rooms (no trailing slash) |
+| `workspace_host` | Workspace host serving the Genie embed surface (no trailing slash) |
 | `workspace_id` | Workspace (org) id appended as the `?o=` URL param |
-| `genie_space_1_id` / `genie_space_1_title` | Left panel space id + heading |
-| `genie_space_2_id` / `genie_space_2_title` | Right panel space id + heading |
-
-Leave `genie_space_2_id` empty to render a single panel. The variables are wired
-into the app-resource `config.env`, so a redeploy applies them — no code change.
+| `genie_space_id` | Genie space id — iframe room (§1) **and** Agent API `agent_id` (§2) |
+| `genie_space_title` | Heading/label shown for the space |
 
 ---
 
 ## Step 2 — Deploy the app
-
-From this directory, against your CLI profile:
 
 ```bash
 databricks bundle validate --strict -t dev -p <profile>   # config sanity check
@@ -92,15 +94,14 @@ databricks apps logs genie-embed-dev -p <profile>     # build + runtime logs
 
 ---
 
-## Step 3 — Allow inline embedding (workspace admin, one-time)
+## Step 3 — Allow inline embedding (workspace admin, one-time) — section 1 only
 
-The app runs on `*.databricksapps.com` while Genie lives on
-`*.cloud.databricks.com` (a different origin, not covered by `*.databricks.com`).
-Databricks only lets a Genie room be framed on domains in the workspace's
-**embedding approved-domains allowlist**. The **same setting governs AI/BI
-dashboard embedding and Genie Agent embedding.** Until the app's domain is
-allowlisted, the browser blocks the frame (CSP `frame-ancestors`) and the panel is
-blank — use the header "Open in Genie" link.
+The app runs on `*.databricksapps.com` while Genie lives on `*.cloud.databricks.com`
+(a different origin). Databricks only lets a Genie room be framed on domains in the
+workspace's **embedding approved-domains allowlist**. Until the app's domain is
+allowlisted, the browser blocks the frame (CSP `frame-ancestors`) and **section 1**
+is blank — use its "Open in Genie ↗" link. **Section 2 is unaffected** (it's a
+same-origin backend call, not a frame).
 
 **3a. Check the current policy:**
 
@@ -109,9 +110,8 @@ databricks settings aibi-dashboard-embedding-access-policy    get -p <profile>
 databricks settings aibi-dashboard-embedding-approved-domains get -p <profile>
 ```
 
-The access policy must be `ALLOW_APPROVED_DOMAINS` (or `ALLOW_ALL_DOMAINS`), and
-the app domain must be in the approved-domains list. **An empty list blocks
-everything.**
+The access policy must be `ALLOW_APPROVED_DOMAINS` (or `ALLOW_ALL_DOMAINS`), and the
+app domain must be in the approved-domains list. **An empty list blocks everything.**
 
 **3b. Add the app domain — UI:** username → **Settings** → **Security** →
 **External access** → **Embed dashboards** → **Manage** → add
@@ -135,70 +135,70 @@ databricks settings aibi-dashboard-embedding-approved-domains update -p <profile
 }"
 ```
 
-The `*.databricksapps.com` wildcard covers this app and every redeploy. If the
-policy is `DENY_ALL_DOMAINS`, first switch it (the `etag` from a `get` is
-required):
-
-```bash
-ETAG=$(databricks settings aibi-dashboard-embedding-access-policy get -p <profile> \
-  | python3 -c "import sys,json;print(json.load(sys.stdin)['etag'])")
-
-databricks settings aibi-dashboard-embedding-access-policy update -p <profile> --json "{
-  \"allow_missing\": true,
-  \"setting\": {
-    \"aibi_dashboard_embedding_access_policy\": {\"access_policy_type\": \"ALLOW_APPROVED_DOMAINS\"},
-    \"etag\": \"$ETAG\",
-    \"setting_name\": \"default\"
-  },
-  \"field_mask\": \"aibi_dashboard_embedding_access_policy.access_policy_type\"
-}"
-```
-
-Reload the app after saving — the Genie rooms render inline. A room's **Share →
-Embed space** dialog lists the current approved domains and shows the exact embed
-URL, which is how the `/embed/genie/rooms/<id>` path below was confirmed.
+If the policy is `DENY_ALL_DOMAINS`, first switch it to `ALLOW_APPROVED_DOMAINS`
+(the same `settings aibi-dashboard-embedding-access-policy update` pattern with an
+`etag` from a `get`).
 
 ---
 
-## How it works (key code)
+## How section 2 works (Genie Agent API + OBO streaming)
 
-**`databricks.yml` — direct engine, variables, and env injection:**
+The custom chat box (`src/app.py`) posts each question to the app's own endpoint,
+which proxies to the GA Genie **Agent API** and streams the SSE response back:
 
-```yaml
-bundle:
-  name: genie_embed
-  engine: direct                    # deploy without Terraform
-variables:
-  genie_space_1_id: { default: "..." }
-  # ...host, workspace_id, titles, space 2...
-resources:
-  apps:
-    genie_embed:
-      name: genie-embed-${bundle.target}
-      source_code_path: ./src
-      config:                       # replaces app.yaml
-        command: ["python", "app.py"]
-        env:
-          - { name: GENIE_SPACE_1_ID, value: "${var.genie_space_1_id}" }
-          # ...one entry per variable...
+```
+browser  --POST /api/ask {question}-->  app  --POST /api/2.0/genie/agents/<id>/responses-->  Genie
+         <----- text/event-stream ------      <---------- text/event-stream --------------
 ```
 
-> Names are dot-free on purpose — CLI v1.3.0 panics on dotted Apps bundle names.
-> The target's `workspace.host` must be a literal (it is resolved for auth before
-> variables), so it is not a variable.
-
-**Building each room URL** (`src/app.py`). The iframe uses the Genie **embed
-surface** (`/embed/genie/rooms/<id>`) — the plain `/genie/rooms/<id>` URL redirects
-inside the frame and is blocked. The "Open in Genie" link-out uses the plain URL:
+**Auth (OBO, with SP fallback):** Databricks Apps forward the signed-in viewer's
+OAuth token in the `X-Forwarded-Access-Token` header. The app uses it as the bearer
+token so Genie answers **as the viewer**, respecting their space/data access — the
+same identity model as the section-1 iframe. When the header is absent (local
+`uvicorn`), it falls back to the app service principal via the Databricks SDK:
 
 ```python
-suffix = f"?o={workspace_id}" if workspace_id else ""
-url       = f"{host}/genie/rooms/{space_id}{suffix}"        # link-out → full room UI
-embed_url = f"{host}/embed/genie/rooms/{space_id}{suffix}"  # iframe → embed surface
+token = request.headers.get("X-Forwarded-Access-Token")   # OBO (deployed app)
+# else: databricks.sdk.core.Config().authenticate()       # SP fallback (local dev)
 ```
 
-**Binding the port** — Databricks Apps inject `DATABRICKS_APP_PORT`; never
-hardcode 8080 or you get 502s:
+> **User API scopes (required).** For OBO to reach the Agent API, the app must
+> request the `genie` scope (and `sql` for the queries Genie runs). This bundle sets
+> them on the app resource:
+>
+> ```yaml
+> user_api_scopes:
+>   - genie
+>   - sql
+> ```
+>
+> Without `genie`, the forwarded token returns
+> `403 Provided OAuth token does not have required scopes: genie` even though
+> section 1's iframe renders fine. **Changing the scopes only takes effect for a
+> viewer after they re-authenticate** (a fresh login / new session) so the token is
+> re-minted with the wider scopes.
+
+**Request body** sent to the Agent API (`stream: true` for live SSE):
+
+```json
+{"input": [{"type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "<question>"}]}],
+ "stream": true,
+ "enable_viz": true}
+```
+
+**Streaming granularity & markdown.** The GA Agent API streams at *item* granularity
+(not raw tokens): each server-sent event carries a complete output item — a
+`reasoning` step, an `execute_sql` `function_call`, a `function_call_output` result
+table, or the final assistant `message` (`output_text`). The app forwards the SSE
+frames verbatim; the browser renders each item live in an **"Agent steps"** trace as
+it arrives (SQL in a code block, result sets as tables), then typewriter-reveals the
+final `message` and renders it as **markdown** (bold, tables, links) via a small
+self-contained renderer — no CDN dependency. A **"Raw agent events"** panel under the
+chat box shows every event for debugging.
+
+**Binding the port** — Databricks Apps inject `DATABRICKS_APP_PORT`; never hardcode
+`8080` or you get 502s:
 
 ```python
 if __name__ == "__main__":
@@ -206,10 +206,27 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=port)
 ```
 
-**The iframe** — each panel header carries an "Open in Genie ↗" link, and the
-iframe fills the panel. `allow="clipboard-write"` matches Databricks' generated
-embed code so viewers can copy CSV / conversation links:
+---
 
-```html
-<iframe src="{embed_url}" title="{title}" allow="clipboard-write"></iframe>
+## Local development
+
+```bash
+cd src
+pip install -r requirements.txt
+DATABRICKS_WORKSPACE_HOST=https://<host> \
+WORKSPACE_ID=<org-id> \
+GENIE_SPACE_ID=<space-id> \
+GENIE_SPACE_TITLE="My Space" \
+python app.py   # serves on :8000
+```
+
+Locally there's no forwarded token, so section 2 authenticates as the service
+principal / user behind your CLI profile (via the SDK). Section 1's iframe won't
+render off the allowlisted `*.databricksapps.com` domain — use its "Open in Genie"
+link. Smoke-test the proxy directly:
+
+```bash
+curl -N -X POST http://localhost:8000/api/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question":"What can you tell me about this data?"}'   # -N shows SSE frames streaming
 ```
